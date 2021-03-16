@@ -1,1 +1,0 @@
-# googlesheets_to_bq
