@@ -1,3 +1,5 @@
+import time
+
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 from googleapiclient.discovery import build
@@ -95,7 +97,8 @@ def get_spreadsheet_data(event, context):
         for row in values[1:]:
             row_to_add = {column_name: '' for column_name in column_names}
             row_to_add['sheet_name'] = sheet_name
-            if len(row) != len(column_names):
+            if len(row) > len(column_names):
+                logger.info(row)
                 wrong_format += 1
                 if wrong_format > 5:
                     logger.info(f'More than 5 rows with wrong format (lengths of row and column_names do not match, {sheet_name} sheet is skipped')
@@ -143,6 +146,7 @@ def get_spreadsheet_data(event, context):
     num_items = len(dicts_to_bq)
     start = 0
     end = 5000
+    time.sleep(5)
     while start < num_items:
         errors = bigquery_client.insert_rows_json(table_ref, dicts_to_bq[start:end])
         if not errors:
