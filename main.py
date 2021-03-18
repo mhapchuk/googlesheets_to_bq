@@ -4,6 +4,7 @@ from googleapiclient.discovery import build
 from google.oauth2 import service_account
 import re
 import logging
+
 logger = logging.getLogger()
 
 
@@ -31,7 +32,10 @@ def get_spreadsheet_data(event, context):
     project_id = event['attributes']['project_id']
     dataset_id = event['attributes']['dataset_id']
     table_id = event['attributes']['table_id'] if 'table_id' in event['attributes'] else None
-    excluded_sheets = event['attributes']['excluded_sheets'].split('|')
+
+    excluded_sheets = event['attributes']['excluded_sheets'].split('|') if 'excluded_sheets' in event['attributes'] else None
+    included_sheets = event['attributes']['included_sheets'].split('|') if 'included_sheets' in event['attributes'] else None
+
     spreadsheet_id = event['attributes']['spreadsheet_id']
 
     scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly']
@@ -43,7 +47,8 @@ def get_spreadsheet_data(event, context):
     sheet_metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
     spreadsheet_name = sheet_metadata.get('properties').get('title')
     if not table_id:
-        table_id = ''.join([char for char in spreadsheet_name.replace(' ', '_') if char.isalnum() or char == '_']).lower()
+        table_id = ''.join(
+            [char for char in spreadsheet_name.replace(' ', '_') if char.isalnum() or char == '_']).lower()
 
     dataset_ref = f'{project_id}.{dataset_id}'
     table_ref = f'{dataset_ref}.{table_id}'
@@ -64,35 +69,50 @@ def get_spreadsheet_data(event, context):
     except NotFound:
         logger.info("Table {} is not found.".format(table_ref))
 
-    sheets = sheet_metadata.get('sheets')
-    sheet_names = [sheet['properties']['title'] for sheet in sheets]
+    if not included_sheets:
+        sheets = sheet_metadata.get('sheets')
+        sheet_names = [sheet['properties']['title'] for sheet in sheets]
+    else:
+        sheet_names = included_sheets
+
+    if excluded_sheets:
+        for sheet in excluded_sheets:
+            sheet_names.remove(sheet)
+
     logger.info(sheet_names)
-
-    for sheet in excluded_sheets:
-        sheet_names.remove(sheet)
-
     sheet = service.spreadsheets()
     column_names = sheet.values().get(spreadsheetId=spreadsheet_id, range=sheet_names[0]).execute()['values'][0]
     for i in range(len(column_names)):
-        column_names[i] = ''.join([char for char in column_names[i].replace(' ', '_') if
+        column_names[i] = ''.join([char for char in column_names[i].replace(' ', '_').replace('$', 'usd') if
                                    char.isalnum() or char == '_']).lower()
 
     dicts_to_bq = []
     for sheet_name in sheet_names:
         result = sheet.values().get(spreadsheetId=spreadsheet_id, range=sheet_name).execute()
         values = result.get('values', [])
-        logger.info(f'{sheet_name}, {len(values)-1}')
+        logger.info(f'{sheet_name}, {len(values) - 1}')
+        wrong_format = 0
         for row in values[1:]:
             row_to_add = {column_name: '' for column_name in column_names}
             row_to_add['sheet_name'] = sheet_name
+            if len(row) != len(column_names):
+                wrong_format += 1
+                if wrong_format > 5:
+                    logger.info(f'More than 5 rows with wrong format (lengths of row and column_names do not match, {sheet_name} sheet is skipped')
+                    break
+                else:
+                    continue
+
             for i in range(len(row)):
                 row_to_add[column_names[i]] = row[i]
+
             dicts_to_bq += [row_to_add]
 
     column_types = {}
     for column in column_names:
         sequence = [row[column] for row in dicts_to_bq]
         column_types[column] = get_sequence_type(sequence)
+
     for column in column_names:
         if column_types[column] == 'FLOAT':
             for row in dicts_to_bq:
@@ -100,13 +120,20 @@ def get_spreadsheet_data(event, context):
                     row[column] = float(row[column].replace(',', '.'))
                 else:
                     row[column] = None
+
         else:
             for row in dicts_to_bq:
                 if not row[column]:
                     row[column] = None
+
     schema = [bigquery.SchemaField('sheet_name', 'STRING')]
+    dummy_name = 1
     for column_name in column_names:
-        schema.append(bigquery.SchemaField(column_name, column_types[column_name]))
+        if column_name:
+            schema.append(bigquery.SchemaField(column_name, column_types[column_name]))
+        else:
+            schema.append(bigquery.SchemaField('dummy_name' + str(dummy_name), column_types[column_name]))
+            dummy_name += 1
 
     table = bigquery.Table(table_ref, schema=schema)
     table = bigquery_client.create_table(table)
