@@ -1,7 +1,7 @@
 # googlesheets_to_bq
 git clone https://github.com/tensionworks/googlesheets_to_bq
 
-cd spreadsheets_to_bq/
+cd googlesheets_to_bq/
 
 gcloud pubsub topics create spreadsheets_to_bq_run
 
