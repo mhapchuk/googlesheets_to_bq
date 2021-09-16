@@ -113,8 +113,11 @@ def get_spreadsheet_data(event, context):
 
     column_types = {}
     for column in column_names:
-        sequence = [row[column] for row in dicts_to_bq]
-        column_types[column] = get_sequence_type(sequence)
+        if str(column).lower().startswith('id') or str(column).lower().endswith('id'):
+            column_types[column] = 'STRING'
+        else:    
+            sequence = [row[column] for row in dicts_to_bq]
+            column_types[column] = get_sequence_type(sequence)
 
     for column in column_names:
         if column_types[column] == 'FLOAT':
